@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name: Test-utf8
-version: 0.01
+version: 0.02
 author: ~
 abstract: handy utf8 tests
 license: perl
@@ -11,5 +11,5 @@ build_requires:
 provides:
   Test::utf8:
     file: lib/Test/utf8.pm
-    version: 0.01
+    version: 0.02
 generated_by: Module::Build version 0.25

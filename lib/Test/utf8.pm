@@ -9,11 +9,11 @@ use Encode;
 use charnames ':full';
 
 use vars qw(@ISA @EXPORT $VERSION %allowed $valid_utf8_regexp);
-$VERSION = "0.01";
+$VERSION = "0.02";
 
 require Exporter;
 @ISA = qw(Exporter);
-@EXPORT = qw(is_valid_string is_dodgy_utf8
+@EXPORT = qw(is_valid_string is_dodgy_utf8 is_sane_utf8
 	      is_within_ascii is_within_latin1 is_within_latin_1
               is_flagged_utf8 isnt_flagged_utf8);
 
@@ -39,7 +39,7 @@ Test::utf8 - handy utf8 tests
 =head1 SYNOPSIS
 
   is_valid_string($string);   # check the string is valid
-  is_dodgy_string($string);   # check not double encoded
+  is_sane_utf8($string);      # check not double encoded
   is_flagged_utf8($string);   # has utf8 flag set
   is_within_latin_1($string); # but only has latin_1 chars in it
 
@@ -99,26 +99,27 @@ sub _invalid_sequence_at_byte($)
   return $pos
 }
 
-=item is_dodgy_utf8($string, $name)
+=item is_sane_utf8($string, $name)
 
 This test fails if the string contains something that looks like it
 might be dodgy utf8, i.e. containing something that looks like the
 multi-byte sequence for a latin-1 character but perl hasn't been
-instructed to treat as such.
+instructed to treat as such.  Strings that are not utf8 always
+automatically pass.
 
 Some examples may help:
 
   # This will pass as it's a normal latin-1 string
-  is_dodgy_utf8("Hello L\x{e9}eon");
+  is_sane_utf8("Hello L\x{e9}eon");
 
   # this will fail because the \x{c3}\x{a9} looks like the
   # utf8 byte sequence for e-acute
   my $string = "Hello L\x{c3}\x{a9}on";
-  is_dodgy_utf8($string);
+  is_sane_utf8($string);
 
   # this will pass because the utf8 is correctly interpreted as utf8
   Encode::_utf8_on($string)
-  is_dodgy_utf8($string);
+  is_sane_utf8($string);
 
 Obviously this isn't a hundred percent reliable.  The edge case where
 this will fail is where you have C<\x{c2}> (which is "LATIN CAPITAL
@@ -128,7 +129,7 @@ WITH TILDE") followed by one of the latin-1 punctuation symbols.
   # a capital letter A with tilde surrounded by smart quotes
   # this will fail because it'll see the "\x{c2}\x{94}" and think
   # it's actually the utf8 sequence for the end smart quote
-  is_dodgy_utf8("\x{93}\x{c2}\x{94}");
+  is_sane_utf8("\x{93}\x{c2}\x{94}");
 
 However, since this hardly comes up this test is reasonably reliable
 in most cases.  Still, care should be applied in cases where dynamic
@@ -152,10 +153,10 @@ my $re_bit = join "|", map { Encode::encode("utf8",chr($_)) } (127..255);
 #binmode STDERR, ":utf8";
 #print STDERR $re_bit;
 
-sub is_dodgy_utf8($;$)
+sub is_sane_utf8($;$)
 {
   my $string = shift;
-  my $name   = shift || "dodgy utf8";
+  my $name   = shift || "sane utf8";
 
   # regexp in scalar context with 'g', meaning this loop will run for
   # each match.  Should only have to run it once, but will redo if
@@ -189,6 +190,16 @@ sub is_dodgy_utf8($;$)
   # got this far, must have passed.
   ok(1,$name);
   return 1;
+}
+
+# historic name of method; deprecated
+sub is_dodgy_utf8
+{
+  # report errors not here but further up the calling stack
+  local $Test::Builder::Level = $Test::Builder::Level + 1;
+
+  # call without prototype with all args
+  &is_sane_utf8(@_);
 }
 
 =back
