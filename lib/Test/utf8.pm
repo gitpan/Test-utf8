@@ -5,22 +5,23 @@ use 5.007003;
 use strict;
 use warnings;
 
+use base qw(Exporter);
+
 use Encode;
 use charnames ':full';
 
-use vars qw(@ISA @EXPORT $VERSION %allowed $valid_utf8_regexp);
-$VERSION = "0.02";
+our $VERSION = "1.00";
 
-require Exporter;
-@ISA = qw(Exporter);
-@EXPORT = qw(is_valid_string is_dodgy_utf8 is_sane_utf8
-	      is_within_ascii is_within_latin1 is_within_latin_1
-              is_flagged_utf8 isnt_flagged_utf8);
+our @EXPORT = qw(
+  is_valid_string is_dodgy_utf8 is_sane_utf8
+  is_within_ascii is_within_latin1 is_within_latin_1
+  is_flagged_utf8 isnt_flagged_utf8
+);
 
 # A Regexp string to match valid UTF8 bytes
 # this info comes from page 78 of "The Unicode Standard 4.0"
 # published by the Unicode Consortium
-$valid_utf8_regexp = <<'.' ;
+our $valid_utf8_regexp = <<'REGEX' ;
         [\x{00}-\x{7f}]
       | [\x{c2}-\x{df}][\x{80}-\x{bf}]
       |         \x{e0} [\x{a0}-\x{bf}][\x{80}-\x{bf}]
@@ -30,7 +31,7 @@ $valid_utf8_regexp = <<'.' ;
       |         \x{f0} [\x{90}-\x{bf}][\x{80}-\x{bf}]
       | [\x{f1}-\x{f3}][\x{80}-\x{bf}][\x{80}-\x{bf}][\x{80}-\x{bf}]
       |         \x{f4} [\x{80}-\x{8f}][\x{80}-\x{bf}][\x{80}-\x{bf}]
-.
+REGEX
 
 =head1 NAME
 
@@ -38,28 +39,58 @@ Test::utf8 - handy utf8 tests
 
 =head1 SYNOPSIS
 
+  # check the string is good
   is_valid_string($string);   # check the string is valid
   is_sane_utf8($string);      # check not double encoded
-  is_flagged_utf8($string);   # has utf8 flag set
-  is_within_latin_1($string); # but only has latin_1 chars in it
+
+  # check the string has certain attributes
+  is_flagged_utf8($string1);   # has utf8 flag set
+  is_within_ascii($string2);   # only has ascii chars in it
+  isnt_within_ascii($string3); # has chars outside the ascii range
+  is_within_latin_1($string4); # only has latin-1 chars in it
+  isnt_within_ascii($string5); # has chars outside the latin-1 range
 
 =head1 DESCRIPTION
 
-This module is a collection of tests that's useful when dealing
-with utf8 strings in Perl.
+This module is a collection of tests useful for dealing with utf8 strings in
+Perl.
 
-=head2 Validity
+This module has two types of tests: The validity tests check if a string is
+valid and not corrupt, whereas the characteristics tests will check that string
+has a given set of characteristics.
 
-These two tests check if a string is valid, and if you've probably
-made a mistake with your string
+=head2 Validity Tests
 
 =over
 
 =item is_valid_string($string, $testname)
 
-This passes and returns true true if and only if the scalar isn't a
-invalid string; In short, it checks that the utf8 flag hasn't been set
-for a string that isn't a valid utf8 encoding.
+Checks if the string is "valid", i.e. this passes and returns true unless
+the internal utf8 flag hasn't been set on scalar that isn't made up of a valid
+utf-8 byte sequence.
+
+This should I<never> happen and, in theory, this test should always pass. Unless
+you (or a module you use) goes monkeying around inside a scalar using Encode's
+private functions or XS code you shouldn't ever end up in a situation where
+you've got a corrupt scalar.  But if you do, and you do, then this function
+should help you detect the problem.
+
+To be clear, here's an example of the error case this can detect:
+
+  my $mark = "Mark";
+  my $leon = "L\x{e9}on";
+  is_valid_string($mark);  # passes, not utf-8
+  is_valid_string($leon);  # passes, not utf-8
+
+  my $iloveny = "I \x{2665} NY";
+  is_valid_string($iloveny);      # passes, proper utf-8
+
+  my $acme = "L\x{c3}\x{a9}on";
+  Encode::_utf8_on($acme);      # (please don't do things like this)
+  is_valid_string($acme);       # passes, proper utf-8 byte sequence upgraded
+
+  Encode::_utf8_on($leon);      # (this is why you don't do things like this)
+  is_valid_string($leon);       # fails! the byte \x{e9} isn't valid utf-8
 
 =cut
 
@@ -70,13 +101,14 @@ sub is_valid_string($;$)
 
   # check we're a utf8 string - if not, we pass.
   unless (Encode::is_utf8($string))
-    { return pass($name) }
+    { return _pass($name) }
 
   # work out at what byte (if any) we have an invalid byte sequence
   # and return the correct test result
   my $pos = _invalid_sequence_at_byte($string);
-  ok(!defined($pos), $name)
-    or diag("malformed byte sequence starting at byte $pos");
+  if (_ok(!defined($pos), $name)) { return 1 }
+  _diag("malformed byte sequence starting at byte $pos");
+  return;
 }
 
 sub _invalid_sequence_at_byte($)
@@ -86,7 +118,7 @@ sub _invalid_sequence_at_byte($)
   # examine the bytes that make up the string (not the chars)
   # by turning off the utf8 flag (no, use bytes doens't
   # work, we're dealing with a regexp)
-  Encode::_utf8_off($string);
+  Encode::_utf8_off($string);  ## no critic (ProtectPrivateSubs)
 
   # work out the index of the first non matching byte
   my $result = $string =~ m/^($valid_utf8_regexp)*/ogx;
@@ -150,9 +182,6 @@ you which is the case.
 # NOTE: This won't work if our locale is nonstandard will it?
 my $re_bit = join "|", map { Encode::encode("utf8",chr($_)) } (127..255);
 
-#binmode STDERR, ":utf8";
-#print STDERR $re_bit;
-
 sub is_sane_utf8($;$)
 {
   my $string = shift;
@@ -161,7 +190,7 @@ sub is_sane_utf8($;$)
   # regexp in scalar context with 'g', meaning this loop will run for
   # each match.  Should only have to run it once, but will redo if
   # the failing case turns out to be allowed in %allowed.
-  while ($string =~ /($re_bit)/o)
+  while ($string =~ /($re_bit)/ox)
   {
     # work out what the double encoded string was
     my $bytes = $1;
@@ -176,41 +205,35 @@ sub is_sane_utf8($;$)
     $char = charnames::viacode($ord);
 
     # print out diagnostic messages
-    fail($name);
-    diag(qq{Found dodgy chars "$codes" at char $index\n});
+    _fail($name);
+    _diag(qq{Found dodgy chars "$codes" at char $index\n});
     if (Encode::is_utf8($string))
-      { diag("Chars in utf8 string look like utf8 byte sequence.") }
+      { _diag("Chars in utf8 string look like utf8 byte sequence.") }
     else
-      { diag("String not flagged as utf8...was it meant to be?\n") }
-    diag("Probably originally a $char char - codepoint $ord (dec), $hex (hex)\n");
+      { _diag("String not flagged as utf8...was it meant to be?\n") }
+    _diag("Probably originally a $char char - codepoint $ord (dec),"
+         ." $hex (hex)\n");
 
     return 0;
   }
 
   # got this far, must have passed.
-  ok(1,$name);
+  _ok(1,$name);
   return 1;
 }
 
 # historic name of method; deprecated
-sub is_dodgy_utf8
-{
-  # report errors not here but further up the calling stack
-  local $Test::Builder::Level = $Test::Builder::Level + 1;
-
-  # call without prototype with all args
-  &is_sane_utf8(@_);
-}
+sub is_dodgy_utf8 { goto &is_sane_utf8 }
 
 =back
 
-=head2 Checking the Range of Characters in a String
+=head2 String Characteristic Tests
 
 These routines allow you to check the range of characters in a string.
 Note that these routines are blind to the actual encoding perl
 internally uses to store the characters, they just check if the
 string contains only characters that can be represented in the named
-encoding.
+encoding:
 
 =over
 
@@ -227,14 +250,14 @@ sub is_within_ascii($;$)
   my $name   = shift || "within ascii";
 
   # look for anything that isn't ascii or pass
-  $string =~ /([^\x{00}-\x{7f}])/ or return pass($name);
+  $string =~ /([^\x{00}-\x{7f}])/x or return _pass($name);
 
   # explain why we failed
   my $dec = ord($1);
   my $hex = sprintf '%02x', $dec;
 
-  fail($name);
-  diag("Char $+[0] not ASCII (it's $dec dec / $hex hex)");
+  _fail($name);
+  _diag("Char $+[0] not ASCII (it's $dec dec / $hex hex)");
 
   return 0;
 }
@@ -251,33 +274,24 @@ sub is_within_latin_1($;$)
   my $name   = shift || "within latin-1";
 
   # look for anything that isn't ascii or pass
-  $string =~ /([^\x{00}-\x{ff}])/ or return pass($name);
+  $string =~ /([^\x{00}-\x{ff}])/x or return _pass($name);
 
   # explain why we failed
   my $dec = ord($1);
   my $hex = sprintf '%x', $dec;
 
-  fail($name);
-  diag("Char $+[0] not Latin-1 (it's $dec dec / $hex hex)");
+  _fail($name);
+  _diag("Char $+[0] not Latin-1 (it's $dec dec / $hex hex)");
 
   return 0;
 }
 
-sub is_within_latin1
-{
-  # report errors not here but further up the calling stack
-  local $Test::Builder::Level = $Test::Builder::Level + 1;
-
-  # call without prototype with all args
-  &is_within_latin_1(@_);
-}
+sub is_within_latin1 { goto &is_within_latin_1 }
 
 =back
 
-=head2 Simple utf8 Flag Tests
-
 Simply check if a scalar is or isn't flagged as utf8 by perl's
-internals.
+internals:
 
 =over
 
@@ -292,7 +306,7 @@ sub is_flagged_utf8
 {
   my $string = shift;
   my $name = shift || "flagged as utf8";
-  return ok(Encode::is_utf8($string),$name);
+  return _ok(Encode::is_utf8($string),$name);
 }
 
 =item isnt_flagged_utf8($string,$name)
@@ -309,24 +323,28 @@ sub isnt_flagged_utf8($;$)
 {
   my $string = shift;
   my $name   = shift || "not flagged as utf8";
-  return ok(!Encode::is_utf8($string), $name);
+  return _ok(!Encode::is_utf8($string), $name);
 }
 
 sub isn::t_flagged_utf8($;$)
 {
   my $string = shift;
   my $name   = shift || "not flagged as utf8";
-  return ok(!Encode::is_utf8($string), $name);
+  return _ok(!Encode::is_utf8($string), $name);
 }
 
 =back
 
 =head1 AUTHOR
 
-  Copyright Mark Fowler 2004.  All rights reserved.
+Written by Mark Fowler B<mark@twoshortplanks.com>
 
-  This program is free software; you can redistribute it
-  and/or modify it under the same terms as Perl itself.
+=head1 COPYRIGHT
+
+Copyright Mark Fowler 2004,2012.  All rights reserved.
+
+This program is free software; you can redistribute it
+and/or modify it under the same terms as Perl itself.
 
 =head1 BUGS
 
@@ -345,29 +363,30 @@ entities.
 # shortcuts for Test::Builder.
 
 use Test::Builder;
-my $Tester = Test::Builder->new();
+my $tester = Test::Builder->new();
 
-sub ok
+sub _ok
 {
   local $Test::Builder::Level = $Test::Builder::Level + 1;
-  $Tester->ok(@_)
+  return $tester->ok(@_)
 }
-sub diag
+sub _diag
 {
   local $Test::Builder::Level = $Test::Builder::Level + 1;
-   $Tester->diag(@_)
-}
-
-sub fail
-{
-  local $Test::Builder::Level = $Test::Builder::Level + 1;
-  ok(0,@_)
+  $tester->diag(@_);
+  return;
 }
 
-sub pass
+sub _fail
 {
   local $Test::Builder::Level = $Test::Builder::Level + 1;
-  ok(1,@_)
+  return _ok(0,@_)
+}
+
+sub _pass
+{
+  local $Test::Builder::Level = $Test::Builder::Level + 1;
+  return _ok(1,@_)
 }
 
 
